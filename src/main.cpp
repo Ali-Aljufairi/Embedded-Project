@@ -57,6 +57,7 @@ void setupTask(void *pvParameters)
         NULL);
 
     vTaskDelete(NULL);
+    vTaskDelay(pdMS_TO_TICKS(2000));
 }
 
 /**
@@ -69,7 +70,6 @@ void inferenceTask(void *pvParameters)
     while (1)
     {
         // Perform continuous inference here
-        vTaskDelay(pdMS_TO_TICKS(2000));
 
         // instead of wait_ms, we'll wait on the signal, this allows threads to cancel us...
         if (ei_sleep(5) != EI_IMPULSE_OK)
