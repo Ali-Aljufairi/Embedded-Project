@@ -9,6 +9,15 @@
 #include "soc/rtc_cntl_reg.h"
 #include <HTTPClient.h>
 
+/* Todo List
+Todo: POST to PHP server
+Todo: Modify to Include More FreeRTOS Tasks
+Todo: Make the Design of The Website Prettier
+Todo: Break the Code into Small Chunks
+Todo: Work on Edge Impulse Model
+Todo: Modify to Include FreeRTOS Queues for POST
+*/
+
 /* Private variables ------------------------------------------------------- */
 static bool debug_nn = false; // Set this to true to see e.g. features generated from the raw signal
 static bool is_initialised = false;
@@ -20,17 +29,27 @@ void ei_camera_deinit(void);
 bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t *out_buf);
 static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr);
 
+void captureAndPostImage(void);
+/**/
+// void captureImage(void);
+// bool uploadImage(uint8_t *buf, size_t img_width, size_t img_height);
+// bool uploadImage(camera_fb_t *fb);
+/**/
+
 /* Task definitions ------------------------------------------------------- */
-void setupTask(void *pvParameters);
+//
+void cameraInitTask(void *pvParameters);
+void connectWiFiTask(void *pvParameters);
+void captureImageTask(void *pvParameters); // TODO: Create a task to capture image
 void inferenceTask(void *pvParameters);
-void captureImage(void);
+void postDataTask(void *pvParameters); // TODO: Create a task to POST data to server (5 images at a time)
+
+/* Task handles ------------------------------------------------------- */
+TaskHandle_t cameratInitTaskHandle = NULL;
+TaskHandle_t connectWiFiTaskHandle = NULL;
+TaskHandle_t inferenceTaskHandle = NULL;
 
 /* WiFi definitions ------------------------------------------------------- */
-bool connectWiFi(void);
-// bool uploadImage(camera_fb_t *fb);
-bool uploadImage(uint8_t *buf, size_t img_width, size_t img_height);
-// String getBody(void);
-
 const char *ssid = "Fares";
 const char *password = "fareS123";
 
@@ -46,39 +65,34 @@ unsigned long previousMillis = 0; // last time image was sent
 
 void setup()
 {
-    // put your setup code here, to run once:
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // disable brownout detector
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // ? Disable brownout detector
 
+    // ? Replace with FreeRTOS task waiting for Serial to be ready
+    // ? Sends notification to cameraInitTask and connectWiFiTask to start
+    // ? SerialSetupTask();
+    // ! If WebServer is used, then SerialSetupTask is not needed
     Serial.begin(115200);
+    while (!Serial)
+        ;
+
+    Serial.println("Edge Impulse Inferencing Demo");
+    Serial.println("Starting setup");
 
     xTaskCreate(
-        setupTask,
-        "SetupTask",
+        cameraInitTask,
+        "cameraInitTask",
         10000, // Stack size (bytes)
         NULL,  // Parameter to pass
         1,     // Task priority
         NULL); // Task handle
 
-    vTaskDelete(NULL);
-}
-
-void setupTask(void *pvParameters)
-{
-    while (!Serial)
-        ;
-
-    Serial.println("Starting setup");
-
-    // Connect to WiFi network
-    connectWiFi();
-
-    // Initialize camera
-    Serial.println("Edge Impulse Inferencing Demo");
-
-    ei_camera_init() ? ei_printf("Camera initialized\r\n")
-                     : ei_printf("Failed to initialize Camera!\r\n");
-
-    ei_printf("\nStarting continuous inference in 2 seconds...\n");
+    xTaskCreate(
+        connectWiFiTask,
+        "ConnectWiFiTask",
+        10000,
+        NULL,
+        1,
+        &connectWiFiTaskHandle);
 
     xTaskCreate(
         inferenceTask,
@@ -86,10 +100,51 @@ void setupTask(void *pvParameters)
         10000,
         NULL,
         1,
-        NULL);
+        &inferenceTaskHandle);
 
+    // xTaskCreate(
+    //     captureImageTask,
+    //     "CaptureImageTask",
+    //     10000,
+    //     NULL,
+    //     1,
+    //     NULL);
+
+    // xTaskCreate(
+    //     postDataTask,
+    //     "postDataTask",
+    //     10000,
+    //     NULL,
+    //     1,
+    //     NULL);
+}
+
+// @brief Connect to WiFi network
+void connectWiFiTask(void *pvParameters)
+{
+    WiFi.mode(WIFI_STA);
+    Serial.print("\nConnecting to ");
+    Serial.println(ssid);
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        Serial.print(".");
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+    Serial.print("\nESP32-CAM IP Address: ");
+    Serial.println(WiFi.localIP()); // Show ESP32 IP on serial
+    xTaskNotifyGive(inferenceTaskHandle);
     vTaskDelete(NULL);
-    vTaskDelay(pdMS_TO_TICKS(2000));
+}
+
+// @brief Initialize camera
+void cameraInitTask(void *pvParameters)
+{
+    ei_camera_init() ? ei_printf("Camera initialized\r\n")
+                     : ei_printf("Failed to initialize Camera!\r\n");
+    ei_printf("\nStarting continuous inference now...\n");
+    xTaskNotifyGive(inferenceTaskHandle);
+    vTaskDelete(NULL);
 }
 
 /**
@@ -101,6 +156,18 @@ void inferenceTask(void *pvParameters)
 {
     while (1)
     {
+        static uint8_t setup = 0;
+
+        // This waits for wifi to be connected and camera to be initialized
+        if (setup == 0)
+        {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // ! This is a blocking function
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY); // ! This is a blocking function
+            setup = 1;
+        }
+
+        ei_printf("Inference task started...\n");
+
         // Perform continuous inference here
 
         // instead of wait_ms, we'll wait on the signal, this allows threads to cancel us...
@@ -127,22 +194,14 @@ void inferenceTask(void *pvParameters)
         {
             ei_printf("Failed to capture image\r\n");
             vPortFree(snapshot_buf); // used vPortFree instead of free to ensure buffer is freed from RAM
-            // return;
-            // restart task if capture fails
-            xTaskCreate(
-                inferenceTask,
-                "InferenceTask",
-                10000,
-                NULL,
-                1,
-                NULL);
-            vTaskDelete(NULL);
+            return;
         }
 
         // upload every X seconds
         if (millis() - previousMillis >= timerInterval)
         {
-            uploadImage(snapshot_buf, (size_t)EI_CLASSIFIER_INPUT_WIDTH, (size_t)EI_CLASSIFIER_INPUT_HEIGHT);
+            // uploadImage(snapshot_buf, (size_t)EI_CLASSIFIER_INPUT_WIDTH, (size_t)EI_CLASSIFIER_INPUT_HEIGHT);
+            captureAndPostImage();
             previousMillis = millis();
         }
 
@@ -330,55 +389,69 @@ static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr)
     return 0;
 }
 
-bool connectWiFi()
+// TODO: Take Queue of 5 snapshots and send them to the server
+// TODO: Rename to postDataTask and send Queue of 5 snapshots
+// * Currently, it sends only one snapshot to the server (not 5)
+void captureAndPostImage()
 {
-    // Connect to WiFi network
-    WiFi.mode(WIFI_STA);
-    Serial.print("\nConnecting to ");
-    Serial.println(ssid);
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED)
+    // Capture image and post it to server
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb)
     {
-        Serial.print(".");
-        vTaskDelay(500 / portTICK_PERIOD_MS);
-    }
-    Serial.print("\nESP32-CAM IP Address: ");
-    Serial.println(WiFi.localIP()); // Show ESP32 IP on serial
-    return true;
-}
-
-// bool uploadImage(camera_fb_t *fb)
-// {
-// }
-
-bool uploadImage(uint8_t *buf, size_t img_width, size_t img_height)
-{
-    if (WiFi.status() != WL_CONNECTED)
-    {
-        Serial.println("WiFi Disconnected");
-        return false;
+        Serial.println("Camera capture failed");
+        return;
     }
 
-    WiFiClient client;
-    HTTPClient http;
+    // Get image size
+    size_t img_size = fb->len;
+    Serial.printf("Image size: %zuB\n", img_size);
 
-    // Your domain name with URL path or IP address with path
-    http.begin(client, serverURL);
+    // Create buffer for image data
+    uint8_t *img_buf = (uint8_t *)malloc(img_size);
+    if (!img_buf)
+    {
+        Serial.println("Can't create buffer");
+        esp_camera_fb_return(fb);
+        return;
+    }
 
-    // Specify content-type header
-    http.addHeader("Content-Type", "multipart/form-data");
+    // Copy image data to buffer
+    memcpy(img_buf, fb->buf, img_size);
 
-    // Include image data in the POST request
-    // http.addHeader("Content-Disposition", "form-data; name=\"image\"; imageFile=\"snapshot.jpg\"");
-    http.addHeader("Content-Disposition", "form-data; imageFile=\"snapshot.jpg\"");
-    http.addHeader("Content-Type", "image/jpeg");
-    int httpResponseCode = http.POST(buf, img_width * img_height * 3);
+    // Return the frame buffer back to the driver for reuse
+    esp_camera_fb_return(fb);
 
-    Serial.print("HTTP Response code: ");
-    Serial.println(httpResponseCode);
+    // Send HTTP POST request using HTTPClient library
+    http.begin(serverURL);
+
+    String boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"; // This should be a random string
+    http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+
+    String body = "--" + boundary + "\r\n";
+    body += "Content-Disposition: form-data; name=\"imageFile\"; filename=\"image.jpg\"\r\n";
+    body += "Content-Type: image/jpeg\r\n\r\n";
+    body += String((char *)img_buf, img_size) + "\r\n";
+    body += "--" + boundary + "--\r\n";
+
+    int httpResponseCode = http.POST(body);
+
+    // If success
+    if (httpResponseCode == HTTP_CODE_OK)
+    {
+        // Get the response from the server
+        String serverResponse = http.getString();
+
+        // Print the response
+        Serial.println("Upload successful!");
+        Serial.println(serverResponse);
+    }
+    else
+    {
+        Serial.println("Error on sending POST: ");
+        Serial.println(httpResponseCode);
+    }
 
     // Free resources
     http.end();
-
-    return httpResponseCode == HTTP_CODE_OK;
+    free(img_buf);
 }
