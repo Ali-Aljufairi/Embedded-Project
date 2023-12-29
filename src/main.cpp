@@ -48,6 +48,9 @@ void postDataTask(void *pvParameters); // TODO: Create a task to POST data to se
 TaskHandle_t cameratInitTaskHandle = NULL;
 TaskHandle_t connectWiFiTaskHandle = NULL;
 TaskHandle_t inferenceTaskHandle = NULL;
+TaskHandle_t postDataTaskHandle = NULL;
+
+QueueHandle_t snapshotQueue;
 
 /* WiFi definitions ------------------------------------------------------- */
 const char *ssid = "Fares";
@@ -77,6 +80,7 @@ void setup()
 
     Serial.println("Edge Impulse Inferencing Demo");
     Serial.println("Starting setup");
+    snapshotQueue = xQueueCreate(2, sizeof(camera_fb_t));
 
     xTaskCreate(
         cameraInitTask,
@@ -110,13 +114,13 @@ void setup()
     //     1,
     //     NULL);
 
-    // xTaskCreate(
-    //     postDataTask,
-    //     "postDataTask",
-    //     10000,
-    //     NULL,
-    //     1,
-    //     NULL);
+    xTaskCreate(
+        postDataTask,
+        "postDataTask",
+        10000,
+        NULL,
+        2,
+        &postDataTaskHandle);
 }
 
 // @brief Connect to WiFi network
@@ -198,12 +202,12 @@ void inferenceTask(void *pvParameters)
         }
 
         // upload every X seconds
-        if (millis() - previousMillis >= timerInterval)
-        {
-            // uploadImage(snapshot_buf, (size_t)EI_CLASSIFIER_INPUT_WIDTH, (size_t)EI_CLASSIFIER_INPUT_HEIGHT);
-            captureAndPostImage();
-            previousMillis = millis();
-        }
+        // if (millis() - previousMillis >= timerInterval)
+        // {
+        //     // uploadImage(snapshot_buf, (size_t)EI_CLASSIFIER_INPUT_WIDTH, (size_t)EI_CLASSIFIER_INPUT_HEIGHT);
+        //     captureAndPostImage();
+        //     previousMillis = millis();
+        // }
 
         // Run the classifier
         ei_impulse_result_t result = {0};
@@ -248,6 +252,65 @@ void inferenceTask(void *pvParameters)
 #endif
 
         vPortFree(snapshot_buf); // used vPortFree instead of free to ensure buffer is freed from RAM
+    }
+}
+
+// take 5 snapshots from the queue but submit 1 POST request to the server
+void postDataTask(void *pvParameters)
+{
+    while (1)
+    {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        Serial.println("POST task started");
+
+        camera_fb_t *snapshot;
+        while (xQueueReceive(snapshotQueue, &snapshot, portMAX_DELAY))
+        {
+
+            http.begin(serverURL);
+            String boundary = "---------------------------2049273179963600201993832688"; // This should be a random string
+            String body;
+
+            Serial.println("Waiting for snapshot ");
+
+            http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+            body += "--" + boundary + "\r\n";
+            body += "Content-Disposition: form-data; name=\"imageFile\"; filename=\"image.jpg\"\r\n";
+            body += "Content-Type: image/jpeg\r\n\r\n";
+            body += String((char *)snapshot->buf, snapshot->len) + "\r\n";
+            body += "--" + boundary + "--\r\n";
+            Serial.println("All snapshots received");
+
+            int httpResponseCode = http.POST(body);
+
+            // If success
+            if (httpResponseCode == HTTP_CODE_OK)
+            {
+                // Get the response from the server
+                String serverResponse = http.getString();
+
+                // Print the response
+                Serial.println("Upload successful!");
+                Serial.println(serverResponse);
+            }
+            else
+            {
+                Serial.println("Error on sending POST: ");
+                Serial.println(httpResponseCode);
+            }
+
+            // Free resources
+            http.end();
+        }
+
+        // Clear the queue
+        // vQueueDelete(snapshotQueue);
+
+        // Recreate the queue for the next round
+        // snapshotQueue = xQueueCreate(5, sizeof(uint8_t *));
+
+        Serial.println("Queue cleared");
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
@@ -329,20 +392,19 @@ bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t *out_buf
 
     bool converted = fmt2rgb888(fb->buf, fb->len, PIXFORMAT_JPEG, snapshot_buf);
 
-    // unsigned long currentMillis = millis();
-    // if (currentMillis - previousMillis >= timerInterval)
-    // {
-    //     uploadImage(fb); // upload image to server
-    //     previousMillis = currentMillis;
-    // }
+    // add to Queeue
+    xQueueSend(snapshotQueue, &fb, portMAX_DELAY);
+
+    // Check if the queue is full
+    if (uxQueueMessagesWaiting(snapshotQueue) == 2)
+    {
+        Serial.println("Queue is full");
+        // Signal the task to post snapshots
+        xTaskNotifyGive(postDataTaskHandle);
+        Serial.println("Task notified");
+    }
 
     esp_camera_fb_return(fb); // return the frame buffer back to the driver for reuse
-
-    // if (currentMillis - previousMillis >= timerInterval)
-    // {
-    //     getBody(); // get response from server
-    //     previousMillis = currentMillis;
-    // }
 
     if (!converted)
     {
