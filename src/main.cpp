@@ -10,18 +10,21 @@
 #include <HTTPClient.h>
 
 /* Todo List
-Todo: POST to PHP server
+Todo: POST to PHP server ✅
 Todo: Modify to Include More FreeRTOS Tasks
 Todo: Make the Design of The Website Prettier
 Todo: Break the Code into Small Chunks
 Todo: Work on Edge Impulse Model
-Todo: Modify to Include FreeRTOS Queues for POST
+Todo: Modify to Include FreeRTOS Queues for POST ✅
 */
+
+#define QUEUE_SIZE 5
 
 /* Private variables ------------------------------------------------------- */
 static bool debug_nn = false; // Set this to true to see e.g. features generated from the raw signal
 static bool is_initialised = false;
-uint8_t *snapshot_buf; // points to the output of the capture
+uint8_t *snapshot_buf;                            // points to the output of the capture
+ei_impulse_result_bounding_box_t *bounding_boxes; // points to the output of the classifier
 
 /* Function definitions ------------------------------------------------------- */
 bool ei_camera_init(void);
@@ -30,11 +33,6 @@ bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t *out_buf
 static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr);
 
 void captureAndPostImage(void);
-/**/
-// void captureImage(void);
-// bool uploadImage(uint8_t *buf, size_t img_width, size_t img_height);
-// bool uploadImage(camera_fb_t *fb);
-/**/
 
 /* Task definitions ------------------------------------------------------- */
 //
@@ -66,6 +64,38 @@ HTTPClient http;
 const int timerInterval = 2000;   // time between each HTTP POST image
 unsigned long previousMillis = 0; // last time image was sent
 
+String bb_structToJSON(ei_impulse_result_bounding_box_t *bb)
+{
+    if (bb->label == NULL)
+    {
+        return "{}";
+    }
+    String json = "{";
+    json += "\"label\": \"" + String(bb->label) + "\",";
+    json += "\"x\": " + String(bb->x) + ",";
+    json += "\"y\": " + String(bb->y) + ",";
+    json += "\"width\": " + String(bb->width) + ",";
+    json += "\"height\": " + String(bb->height) + ",";
+    json += "\"value\": " + String(bb->value);
+    json += "}";
+    return json;
+}
+
+String bb_arrayToJSON(ei_impulse_result_bounding_box_t *bb, size_t bb_count)
+{
+    String json = "[";
+    for (size_t ix = 0; ix < bb_count; ix++)
+    {
+        json += bb_structToJSON(&bb[ix]);
+        if (ix < bb_count - 1)
+        {
+            json += ",";
+        }
+    }
+    json += "]";
+    return json;
+}
+
 void setup()
 {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // ? Disable brownout detector
@@ -80,7 +110,7 @@ void setup()
 
     Serial.println("Edge Impulse Inferencing Demo");
     Serial.println("Starting setup");
-    snapshotQueue = xQueueCreate(2, sizeof(camera_fb_t));
+    snapshotQueue = xQueueCreate(QUEUE_SIZE, sizeof(camera_fb_t));
 
     xTaskCreate(
         cameraInitTask,
@@ -146,7 +176,6 @@ void cameraInitTask(void *pvParameters)
 {
     ei_camera_init() ? ei_printf("Camera initialized\r\n")
                      : ei_printf("Failed to initialize Camera!\r\n");
-    ei_printf("\nStarting continuous inference now...\n");
     xTaskNotifyGive(inferenceTaskHandle);
     vTaskDelete(NULL);
 }
@@ -160,6 +189,7 @@ void inferenceTask(void *pvParameters)
 {
     while (1)
     {
+        ei_printf("\nStarting continuous inference now...\n");
         static uint8_t setup = 0;
 
         // This waits for wifi to be connected and camera to be initialized
@@ -201,14 +231,6 @@ void inferenceTask(void *pvParameters)
             return;
         }
 
-        // upload every X seconds
-        // if (millis() - previousMillis >= timerInterval)
-        // {
-        //     // uploadImage(snapshot_buf, (size_t)EI_CLASSIFIER_INPUT_WIDTH, (size_t)EI_CLASSIFIER_INPUT_HEIGHT);
-        //     captureAndPostImage();
-        //     previousMillis = millis();
-        // }
-
         // Run the classifier
         ei_impulse_result_t result = {0};
 
@@ -223,6 +245,7 @@ void inferenceTask(void *pvParameters)
         ei_printf("predictions (DSP: %d ms., Classification: %d ms., Anomaly: %d ms.): \n",
                   result.timing.dsp, result.timing.classification, result.timing.anomaly);
 
+        bounding_boxes = result.bounding_boxes;
 #if EI_CLASSIFIER_OBJECT_DETECTION == 1
         bool bb_found = result.bounding_boxes[0].value > 0;
         for (size_t ix = 0; ix < result.bounding_boxes_count; ix++)
@@ -279,6 +302,15 @@ void postDataTask(void *pvParameters)
             body += "Content-Type: image/jpeg\r\n\r\n";
             body += String((char *)snapshot->buf, snapshot->len) + "\r\n";
             body += "--" + boundary + "--\r\n";
+
+            body += "--" + boundary + "\r\n";
+            body += "Content-Disposition: form-data; name=\"boundingBoxes\"\r\n";
+            body += "Content-Type: application/json\r\n\r\n";
+            body += bb_arrayToJSON(bounding_boxes, EI_CLASSIFIER_MAX_OBJECT_DETECTION_COUNT) + "\r\n";
+            body += "--" + boundary + "--\r\n";
+
+            Serial.println(bb_arrayToJSON(bounding_boxes, EI_CLASSIFIER_MAX_OBJECT_DETECTION_COUNT));
+
             Serial.println("All snapshots received");
 
             int httpResponseCode = http.POST(body);
@@ -396,7 +428,7 @@ bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t *out_buf
     xQueueSend(snapshotQueue, &fb, portMAX_DELAY);
 
     // Check if the queue is full
-    if (uxQueueMessagesWaiting(snapshotQueue) == 2)
+    if (uxQueueMessagesWaiting(snapshotQueue) == QUEUE_SIZE)
     {
         Serial.println("Queue is full");
         // Signal the task to post snapshots
