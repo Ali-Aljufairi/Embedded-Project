@@ -191,9 +191,8 @@ void inferenceTask(void *pvParameters)
 #endif
 
         vPortFree(snapshot_buf);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
-
-    vTaskDelay(500 / portTICK_PERIOD_MS);
 }
 
 // take 5 snapshots from the queue but submit 1 POST request to the server
@@ -252,6 +251,7 @@ void postDataTask(void *pvParameters)
             // Free resources
             http.end();
         }
+        vPortFree(bounding_boxes);
 
         // Clear the queue
         // vQueueDelete(snapshotQueue);
@@ -260,6 +260,7 @@ void postDataTask(void *pvParameters)
         // snapshotQueue = xQueueCreate(5, sizeof(uint8_t *));
 
         Serial.println("Queue cleared");
+        bounding_boxes = (ei_impulse_result_bounding_box_t *)pvPortMalloc(EI_CLASSIFIER_MAX_OBJECT_DETECTION_COUNT * sizeof(ei_impulse_result_bounding_box_t) * 5);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
