@@ -2,12 +2,17 @@
 #include "edge-impulse-sdk/dsp/image/image.hpp"
 #include <Arduino.h>
 #include "esp_camera.h"
-#include "camera_config.h"
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include <HTTPClient.h>
+
+#include <setup.h>
+#include <task.h>
+#include <secret.h>
+#include <data_handle.h>
+#include "camera_config.h"
 
 /* Todo List
 Todo: POST to PHP server ✅
@@ -18,97 +23,18 @@ Todo: Work on Edge Impulse Model
 Todo: Modify to Include FreeRTOS Queues for POST ✅
 */
 
-#define QUEUE_SIZE 5
-
-/* Private variables ------------------------------------------------------- */
-static bool debug_nn = false; // Set this to true to see e.g. features generated from the raw signal
-static bool is_initialised = false;
-uint8_t *snapshot_buf;                            // points to the output of the capture
-ei_impulse_result_bounding_box_t *bounding_boxes; // points to the output of the classifier
-
-/* Function definitions ------------------------------------------------------- */
-bool ei_camera_init(void);
-void ei_camera_deinit(void);
-bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t *out_buf);
-static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr);
-
-void captureAndPostImage(void);
-
-/* Task definitions ------------------------------------------------------- */
-//
-void cameraInitTask(void *pvParameters);
-void connectWiFiTask(void *pvParameters);
-void captureImageTask(void *pvParameters); // TODO: Create a task to capture image
-void inferenceTask(void *pvParameters);
-void postDataTask(void *pvParameters); // TODO: Create a task to POST data to server (5 images at a time)
-
-/* Task handles ------------------------------------------------------- */
-TaskHandle_t cameratInitTaskHandle = NULL;
-TaskHandle_t connectWiFiTaskHandle = NULL;
-TaskHandle_t inferenceTaskHandle = NULL;
-TaskHandle_t postDataTaskHandle = NULL;
-
-QueueHandle_t snapshotQueue;
-
-/* WiFi definitions ------------------------------------------------------- */
-const char *ssid = "Fares";
-const char *password = "fareS123";
-
-String serverName = "192.168.1.13";
-String serverPath = "/upload.php";
-const int serverPort = 8080;
-String serverURL = "http://" + serverName + ":" + serverPort + serverPath;
-
 WiFiClient client;
 HTTPClient http;
-const int timerInterval = 2000;   // time between each HTTP POST image
-unsigned long previousMillis = 0; // last time image was sent
-
-String bb_structToJSON(ei_impulse_result_bounding_box_t *bb)
-{
-    if (bb->label == NULL)
-    {
-        return "{}";
-    }
-    String json = "{";
-    json += "\"label\": \"" + String(bb->label) + "\",";
-    json += "\"x\": " + String(bb->x) + ",";
-    json += "\"y\": " + String(bb->y) + ",";
-    json += "\"width\": " + String(bb->width) + ",";
-    json += "\"height\": " + String(bb->height) + ",";
-    json += "\"value\": " + String(bb->value);
-    json += "}";
-    return json;
-}
-
-String bb_arrayToJSON(ei_impulse_result_bounding_box_t *bb, size_t bb_count)
-{
-    String json = "[";
-    for (size_t ix = 0; ix < bb_count; ix++)
-    {
-        json += bb_structToJSON(&bb[ix]);
-        if (ix < bb_count - 1)
-        {
-            json += ",";
-        }
-    }
-    json += "]";
-    return json;
-}
 
 void setup()
 {
     WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // ? Disable brownout detector
 
-    // ? Replace with FreeRTOS task waiting for Serial to be ready
-    // ? Sends notification to cameraInitTask and connectWiFiTask to start
-    // ? SerialSetupTask();
-    // ! If WebServer is used, then SerialSetupTask is not needed
     Serial.begin(115200);
     while (!Serial)
         ;
 
-    Serial.println("Edge Impulse Inferencing Demo");
+    ei_printf("Vision Vortex Demo\n");
     Serial.println("Starting setup");
     snapshotQueue = xQueueCreate(QUEUE_SIZE, sizeof(camera_fb_t));
 
@@ -136,14 +62,6 @@ void setup()
         1,
         &inferenceTaskHandle);
 
-    // xTaskCreate(
-    //     captureImageTask,
-    //     "CaptureImageTask",
-    //     10000,
-    //     NULL,
-    //     1,
-    //     NULL);
-
     xTaskCreate(
         postDataTask,
         "postDataTask",
@@ -157,15 +75,15 @@ void setup()
 void connectWiFiTask(void *pvParameters)
 {
     WiFi.mode(WIFI_STA);
-    Serial.print("\nConnecting to ");
+    ei_printf("\nConnecting to ");
     Serial.println(ssid);
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED)
     {
-        Serial.print(".");
+        ei_printf(".");
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
-    Serial.print("\nESP32-CAM IP Address: ");
+    ei_printf("\nESP32-CAM IP Address: ");
     Serial.println(WiFi.localIP()); // Show ESP32 IP on serial
     xTaskNotifyGive(inferenceTaskHandle);
     vTaskDelete(NULL);
@@ -181,9 +99,7 @@ void cameraInitTask(void *pvParameters)
 }
 
 /**
- * @brief      Get data and run inferencing
- *
- * @param[in]  debug  Get debug info if true
+ * @brief      Run inferencing
  */
 void inferenceTask(void *pvParameters)
 {
@@ -200,9 +116,8 @@ void inferenceTask(void *pvParameters)
             setup = 1;
         }
 
-        ei_printf("Inference task started...\n");
-
         // Perform continuous inference here
+        ei_printf("Inference task started...\n");
 
         // instead of wait_ms, we'll wait on the signal, this allows threads to cancel us...
         if (ei_sleep(5) != EI_IMPULSE_OK)
@@ -227,8 +142,8 @@ void inferenceTask(void *pvParameters)
         if (ei_camera_capture((size_t)EI_CLASSIFIER_INPUT_WIDTH, (size_t)EI_CLASSIFIER_INPUT_HEIGHT, snapshot_buf) == false)
         {
             ei_printf("Failed to capture image\r\n");
-            vPortFree(snapshot_buf); // used vPortFree instead of free to ensure buffer is freed from RAM
-            return;
+            vPortFree(snapshot_buf);
+            return; // ? RETURN IN FREERTOS???
         }
 
         // Run the classifier
@@ -256,7 +171,8 @@ void inferenceTask(void *pvParameters)
                 continue;
             }
 
-            ei_printf("    %s (%f) [ x: %u, y: %u, width: %u, height: %u ]\n", bb.label, bb.value, bb.x, bb.y, bb.width, bb.height);
+            ei_printf("    %s (%f) [ x: %u, y: %u, width: %u, height: %u ]\n",
+                      bb.label, bb.value, bb.x, bb.y, bb.width, bb.height);
         }
         if (!bb_found)
         {
@@ -274,8 +190,10 @@ void inferenceTask(void *pvParameters)
         ei_printf("    anomaly score: %.3f\n", result.anomaly);
 #endif
 
-        vPortFree(snapshot_buf); // used vPortFree instead of free to ensure buffer is freed from RAM
+        vPortFree(snapshot_buf);
     }
+
+    vTaskDelay(500 / portTICK_PERIOD_MS);
 }
 
 // take 5 snapshots from the queue but submit 1 POST request to the server
@@ -349,59 +267,6 @@ void postDataTask(void *pvParameters)
 void loop()
 {
     // nothing to do here
-}
-
-/**
- * @brief   Setup image sensor & start streaming
- *
- * @retval  false if initialisation failed
- */
-bool ei_camera_init(void)
-{
-
-    if (is_initialised)
-        return true;
-
-    // initialize the camera
-    esp_err_t err = esp_camera_init(&camera_config);
-    if (err != ESP_OK)
-    {
-        Serial.printf("Camera init failed with error 0x%x\n", err);
-        return false;
-    }
-
-    sensor_t *s = esp_camera_sensor_get();
-    // initial sensors are flipped vertically and colors are a bit saturated
-    if (s->id.PID == OV3660_PID)
-    {
-        s->set_vflip(s, 1);      // flip it back
-        s->set_brightness(s, 1); // up the brightness just a bit
-        s->set_saturation(s, 0); // lower the saturation
-    }
-
-#if defined(CAMERA_MODEL_M5STACK_WIDE)
-    s->set_vflip(s, 1);
-    s->set_hmirror(s, 1);
-#endif
-
-    is_initialised = true;
-    return true;
-}
-
-void ei_camera_deinit(void)
-{
-
-    // deinitialize the camera
-    esp_err_t err = esp_camera_deinit();
-
-    if (err != ESP_OK)
-    {
-        ei_printf("Camera deinit failed\n");
-        return;
-    }
-
-    is_initialised = false;
-    return;
 }
 
 bool ei_camera_capture(uint32_t img_width, uint32_t img_height, uint8_t *out_buf)

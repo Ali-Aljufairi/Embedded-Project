@@ -1,5 +1,6 @@
+#include "esp_camera.h"
 
-#define CAMERA_MODEL_AI_THINKER // Has PSRAM
+#define CAMERA_MODEL_AI_THINKER
 
 #define PWDN_GPIO_NUM 32
 #define RESET_GPIO_NUM -1
@@ -23,7 +24,6 @@
 #define EI_CAMERA_RAW_FRAME_BUFFER_ROWS 240
 #define EI_CAMERA_FRAME_BYTE_SIZE 3
 
-#include "esp_camera.h"
 static camera_config_t camera_config = {
     .pin_pwdn = PWDN_GPIO_NUM,
     .pin_reset = RESET_GPIO_NUM,
@@ -56,3 +56,55 @@ static camera_config_t camera_config = {
     .fb_location = CAMERA_FB_IN_PSRAM,
     .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
 };
+
+/**
+ * @brief   Setup image sensor & start streaming
+ *
+ * @retval  false if initialisation failed
+ */
+bool ei_camera_init(void)
+{
+    if (is_initialised)
+        return true;
+
+    // initialize the camera
+    esp_err_t err = esp_camera_init(&camera_config);
+    if (err != ESP_OK)
+    {
+        Serial.printf("Camera init failed with error 0x%x\n", err);
+        return false;
+    }
+
+    sensor_t *s = esp_camera_sensor_get();
+    // initial sensors are flipped vertically and colors are a bit saturated
+    if (s->id.PID == OV3660_PID)
+    {
+        s->set_vflip(s, 1);      // flip it back
+        s->set_brightness(s, 1); // up the brightness just a bit
+        s->set_saturation(s, 0); // lower the saturation
+    }
+
+#if defined(CAMERA_MODEL_M5STACK_WIDE)
+    s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
+#endif
+
+    is_initialised = true;
+    return true;
+}
+
+void ei_camera_deinit(void)
+{
+
+    // deinitialize the camera
+    esp_err_t err = esp_camera_deinit();
+
+    if (err != ESP_OK)
+    {
+        ei_printf("Camera deinit failed\n");
+        return;
+    }
+
+    is_initialised = false;
+    return;
+}
