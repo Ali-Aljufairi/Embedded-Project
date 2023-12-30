@@ -99,47 +99,5 @@ if ($uploadOk == 0) {
 }
 
 
-
-
-
-
-// Check if the request method is POST
-// if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    
-//     // Read the raw JSON data from the request body
-//     $json_data = file_get_contents("php://input");
-
-//     // Decode the JSON data
-//     $decoded_data = json_decode($json_data, true);
-
-//     // Check if JSON decoding was successful
-//     if ($decoded_data !== null) {
-//         // Specify the path where you want to save the JSON file
-//         $json_folder = 'JSON/';
-//         $json_filename = 'received_data_' . time() . '.json';
-//         $json_filepath = $json_folder . $json_filename;
-
-//         // Save the JSON data to the file
-//         file_put_contents($json_filepath, $json_data);
-
-//         // Respond with a success message and the path to the saved file
-//         $response = array('status' => 'success', 'message' => 'JSON data received and saved successfully', 'file_path' => $json_filepath);
-//         echo json_encode($response);
-//     } else {
-//         // Respond with an error message for invalid JSON
-//         $response = array('status' => 'error', 'message' => 'Invalid JSON data');
-//         echo json_encode($response);
-//     }
-
-// } else {
-//     // Respond with an error message for unsupported request method
-//     $response = array('status' => 'error', 'message' => 'Unsupported request method');
-//     echo json_encode($response);
-// }
-
-
-
-// redirect to gallery page
-// header("Location: gallery.php");
   
 ?>

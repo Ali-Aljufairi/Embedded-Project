@@ -16,10 +16,10 @@
 
 /* Todo List
 Todo: POST to PHP server ✅
-Todo: Modify to Include More FreeRTOS Tasks
-Todo: Make the Design of The Website Prettier
-Todo: Break the Code into Small Chunks
-Todo: Work on Edge Impulse Model
+Todo: Modify to Include More FreeRTOS Tasks ✅
+Todo: Make the Design of The Website Prettier ✅
+Todo: Break the Code into Small Chunks ✅
+Todo: Work on Edge Impulse Model ✅
 Todo: Modify to Include FreeRTOS Queues for POST ✅
 */
 
