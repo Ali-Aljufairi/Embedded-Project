@@ -16,10 +16,10 @@
 
 /* Todo List
 Todo: POST to PHP server ✅
-Todo: Modify to Include More FreeRTOS Tasks
-Todo: Make the Design of The Website Prettier
-Todo: Break the Code into Small Chunks
-Todo: Work on Edge Impulse Model
+Todo: Modify to Include More FreeRTOS Tasks ✅
+Todo: Make the Design of The Website Prettier ✅
+Todo: Break the Code into Small Chunks ✅
+Todo: Work on Edge Impulse Model ✅
 Todo: Modify to Include FreeRTOS Queues for POST ✅
 */
 
@@ -252,12 +252,6 @@ void postDataTask(void *pvParameters)
             // Free resources
             http.end();
         }
-
-        // Clear the queue
-        // vQueueDelete(snapshotQueue);
-
-        // Recreate the queue for the next round
-        // snapshotQueue = xQueueCreate(5, sizeof(uint8_t *));
 
         Serial.println("Queue cleared");
         vTaskDelay(1000 / portTICK_PERIOD_MS);
