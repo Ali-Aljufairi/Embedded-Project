@@ -1,22 +1,21 @@
-# ESP32-CAM Object Detection
+# Embedded Project
 
 ## Project Overview
 
-The ESP32-CAM is a low-cost development board with a built-in camera, suitable for various applications such as image processing, object detection, and video streaming. TensorFlow Lite is a lightweight machine learning framework ideal for running inference on microcontrollers. Edge Impulse is a platform for training machine learning models and deploying them to microcontrollers.
-
-This project integrates these technologies to enable object detection on the ESP32-CAM. Captured images are preprocessed, object detection is performed using a TensorFlow Lite model trained with Edge Impulse, and the results are sent to a local PHP server for display on a webpage.
+This project enables object detection on the ESP32-CAM. Captured images are preprocessed, object detection is performed using a TensorFlow Lite model trained with Edge Impulse, and the results are sent to a local PHP server for display on a webpage.
 
 ## Screenshots
 
 ### Web Interface
 
 <!-- ![Project Screenshot](webpage.png) -->
-<img src="webpage.png" width="500" alt="Project Screenshot" />
+<img src="webpage.png" alt="Project Screenshot" />
 
 ### ESP32-CAM Module
 
 <!-- ![ESP32-CAM](esp32cam.jpg) -->
 <img src="esp32cam.jpg" height="200" alt="ESP32-CAM" />
+
 
 ## Features
 
